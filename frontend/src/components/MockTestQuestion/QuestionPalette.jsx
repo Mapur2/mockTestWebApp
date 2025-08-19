@@ -1,13 +1,13 @@
-export default function QuestionPalette({ questions = [], currentIndex, answers = {}, onJump }) {
+export default function QuestionPalette({ questions = [], currentQuestionId, answers = {}, onJump }) {
   return (
-    <div className="grid grid-cols-10 gap-2">
+    <div className="grid grid-cols-4 gap-3">
       {questions.map((q, idx) => {
         const isAnswered = Boolean(answers[q.question_id])
-        const isCurrent = currentIndex === idx
+        const isCurrent = currentQuestionId && q.question_id === currentQuestionId
         return (
           <button key={q.question_id} type="button" onClick={() => onJump(idx)}
-            className={`h-8 rounded text-xs font-semibold ${
-              isCurrent ? 'bg-indigo-500 text-white' : isAnswered ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-300'
+            className={`h-12 rounded-lg text-base font-semibold transition ${
+              isCurrent ? 'bg-purple-600 text-white' : isAnswered ? 'bg-purple-700/70 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
             }`}>
             {idx + 1}
           </button>

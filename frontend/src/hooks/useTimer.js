@@ -1,40 +1,52 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-export function useTimer(initialSeconds, { onExpire } = {}) {
+export function useTimer(initialSeconds, { onExpire, autoStart = true } = {}) {
   const [secondsLeft, setSecondsLeft] = useState(initialSeconds)
-  const [isRunning, setIsRunning] = useState(true)
+  const [isRunning, setIsRunning] = useState(Boolean(autoStart))
   const intervalRef = useRef(null)
+  const onExpireRef = useRef(onExpire)
 
-  const tick = useCallback(() => {
-    setSecondsLeft(prev => {
-      if (prev <= 1) {
-        clearInterval(intervalRef.current)
-        intervalRef.current = null
-        setIsRunning(false)
-        onExpire && onExpire()
-        return 0
-      }
-      return prev - 1
-    })
+  // Keep latest onExpire without recreating interval
+  useEffect(() => {
+    onExpireRef.current = onExpire
   }, [onExpire])
 
+  const clearTimer = useCallback(() => {
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current)
+      intervalRef.current = null
+    }
+  }, [])
+
+  const startTimer = useCallback(() => {
+    if (intervalRef.current != null) return
+    intervalRef.current = setInterval(() => {
+      setSecondsLeft(prev => {
+        if (prev <= 1) {
+          clearTimer()
+          setIsRunning(false)
+          if (onExpireRef.current) onExpireRef.current()
+          return 0
+        }
+        return prev - 1
+      })
+    }, 1000)
+  }, [clearTimer])
+
   useEffect(() => {
-    if (isRunning && intervalRef.current == null) {
-      intervalRef.current = setInterval(tick, 1000)
-    }
+    if (isRunning) startTimer()
     return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current)
+      clearTimer()
     }
-  }, [isRunning, tick])
+  }, [isRunning, startTimer, clearTimer])
 
   const pause = useCallback(() => setIsRunning(false), [])
   const resume = useCallback(() => setIsRunning(true), [])
   const reset = useCallback((newSeconds) => {
-    if (intervalRef.current) clearInterval(intervalRef.current)
-    intervalRef.current = null
+    clearTimer()
     setSecondsLeft(newSeconds)
     setIsRunning(true)
-  }, [])
+  }, [clearTimer])
 
   return { secondsLeft, isRunning, pause, resume, reset }
 }

@@ -4,7 +4,8 @@ from datetime import datetime
 
 class TestConfig(BaseModel):
     test_id: Optional[str] = None
-    subject: str
+    subject: Optional[str] = None
+    subjects: Optional[List[str]] = None
     duration: int = Field(..., gt=0, description="Duration in minutes")
     total_questions: int = Field(..., gt=0, le=100, description="Number of questions")
     topics: List[str] = Field(default_factory=list)

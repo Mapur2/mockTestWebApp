@@ -1,9 +1,10 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import { useTimer } from '../../hooks/useTimer'
 import { formatTime } from '../../utils/formatters'
 
 export default function Timer({ minutes, onExpire, onTick }) {
-  const { secondsLeft } = useTimer(minutes * 60, { onExpire })
+  const totalSeconds = useMemo(() => Math.max(0, Math.floor(minutes * 60)), [minutes])
+  const { secondsLeft } = useTimer(totalSeconds, { onExpire })
 
   useEffect(() => {
     onTick && onTick(secondsLeft)

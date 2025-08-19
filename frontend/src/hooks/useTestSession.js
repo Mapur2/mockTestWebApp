@@ -22,6 +22,7 @@ export function useTestSession() {
       setTestId(id)
       const qResp = await getTestQuestions(id, config.subject)
       setQuestions(qResp.questions || [])
+      return resp
     } catch (e) {
       setError(e?.response?.data?.detail || e.message)
     } finally {
@@ -50,12 +51,13 @@ export function useTestSession() {
     }
   }, [answers, testId])
 
-  const refreshResults = useCallback(async () => {
-    if (!testId) return
+  const refreshResults = useCallback(async (idOverride) => {
+    const idToUse = idOverride || testId
+    if (!idToUse) return
     setLoading(true)
     setError(null)
     try {
-      const resp = await getTestResults(testId)
+      const resp = await getTestResults(idToUse)
       setResults(resp.results)
       return resp
     } catch (e) {
@@ -65,6 +67,12 @@ export function useTestSession() {
     }
   }, [testId])
 
+  const hydrate = useCallback(({ id, config, questions: questionsList }) => {
+    if (id) setTestId(id)
+    if (config) setTestConfig(config)
+    if (Array.isArray(questionsList)) setQuestions(questionsList)
+  }, [])
+
   const progress = useMemo(() => ({
     answered: Object.keys(answers).length,
     total: totalQuestions,
@@ -72,7 +80,7 @@ export function useTestSession() {
 
   return {
     state: { testConfig, testId, questions, answers, results, loading, error, progress },
-    actions: { createAndLoad, recordAnswer, submit, refreshResults }
+    actions: { createAndLoad, recordAnswer, submit, refreshResults, hydrate }
   }
 }
 

@@ -76,18 +76,30 @@ async def get_test_questions(test_id: str, subject: Optional[str] = None):
         if not test_config:
             raise HTTPException(status_code=404, detail="Test not found")
         
-        # Build query for questions
-        query = {"subject": test_config["subject"]}
+        # Determine subjects for this test (multi-subject supported)
+        subjects = []
         if subject:
-            query["subject"] = subject
-        
-        # Get questions from database (exclude Mongo _id for JSON safety)
+            subjects = [subject]
+        elif test_config.get("subjects"):
+            subjects = list(test_config["subjects"])
+        elif test_config.get("subject"):
+            subjects = [test_config["subject"]]
+        else:
+            subjects = ["Physics"]
+
+        # Distribute total questions across subjects
+        total = int(test_config.get("total_questions", 10))
+        per = max(1, total // len(subjects))
+        remainder = total - (per * len(subjects))
+
         questions = []
-        async for question in db.questions.find(query, {"_id": 0}).limit(test_config["total_questions"]):
-            # Remove correct answer for test-taking
-            question.pop("correct_answer", None)
-            question.pop("explanation", None)
-            questions.append(question)
+        for idx, sub in enumerate(subjects):
+            limit = per + (1 if idx < remainder else 0)
+            cursor = db.questions.find({"subject": sub}, {"_id": 0}).limit(limit)
+            async for question in cursor:
+                question.pop("correct_answer", None)
+                question.pop("explanation", None)
+                questions.append(question)
         
         if not questions:
             # Generate sample questions if none exist
@@ -98,7 +110,8 @@ async def get_test_questions(test_id: str, subject: Optional[str] = None):
             "test_id": test_id,
             "questions": questions,
             "total_questions": len(questions),
-            "duration": test_config["duration"]
+            "duration": test_config["duration"],
+            "subjects": subjects
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error retrieving questions: {str(e)}")
@@ -115,8 +128,9 @@ async def submit_test(test_id: str, submission: TestSubmission):
             raise HTTPException(status_code=404, detail="Test not found")
         
         # Get questions with correct answers for grading (exclude _id)
+        subjects = test_config.get("subjects") or [test_config.get("subject", "Physics")]
         questions = []
-        async for question in db.questions.find({"subject": test_config["subject"]}, {"_id": 0}):
+        async for question in db.questions.find({"subject": {"$in": subjects}}, {"_id": 0}):
             questions.append(question)
         
         if not questions:
@@ -255,8 +269,16 @@ def generate_sample_questions(test_config: dict) -> List[dict]:
         ]
     }
     
-    subject = test_config.get("subject", "Physics")
-    return subjects.get(subject, subjects["Physics"])
+    subjects_list = test_config.get("subjects")
+    if subjects_list:
+        ordered = []
+        for s in subjects_list:
+            ordered.extend(subjects.get(s, []))
+        total = int(test_config.get("total_questions", len(ordered)))
+        return ordered[:total]
+    else:
+        subject = test_config.get("subject", "Physics")
+        return subjects.get(subject, subjects["Physics"])
 
 def grade_test(answers: dict, questions: List[dict], time_taken: int) -> TestResults:
     """Grade the test and calculate results"""
