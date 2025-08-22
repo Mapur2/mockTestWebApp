@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from typing import List, Optional
@@ -8,7 +8,7 @@ import httpx
 import os
 from dotenv import load_dotenv
 
-from models.test import TestConfig, Question, TestSubmission, TestResults
+from models.test import TestConfig, Question, TestSubmission, TestResults, RegisterRequest, LoginRequest, TokenResponse
 from db import get_database
 
 load_dotenv()
@@ -35,16 +35,72 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 # In-memory storage for demo (replace with database in production)
 test_sessions = {}
 test_results = {}
+from jose import jwt, JWTError
+from passlib.context import CryptContext
+
+JWT_SECRET = os.getenv("JWT_SECRET", "dev_secret_change_me")
+JWT_ALG = "HS256"
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+def create_access_token(data: dict, expires_minutes: int = 60*24):
+    payload = data.copy()
+    payload["exp"] = datetime.utcnow() + timedelta(minutes=expires_minutes)
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
+
+def verify_token(auth_header: Optional[str]) -> Optional[dict]:
+    if not auth_header or not auth_header.lower().startswith("bearer "):
+        return None
+    token = auth_header.split(" ", 1)[1]
+    try:
+        return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+    except JWTError:
+        return None
+
+def hash_password(p: str) -> str:
+    return pwd_context.hash(p)
+
+def verify_password(p: str, hashed: str) -> bool:
+    return pwd_context.verify(p, hashed)
+
+@app.post("/api/auth/register", response_model=TokenResponse)
+async def register_user(req: RegisterRequest):
+    db = get_database()
+    if await db.users.find_one({"$or": [{"username": req.username}, {"email": req.email}] }):
+        raise HTTPException(status_code=400, detail="User already exists")
+    user = {
+        "user_id": str(uuid.uuid4()),
+        "username": req.username,
+        "email": req.email,
+        "password_hash": hash_password(req.password),
+        "created_at": datetime.utcnow(),
+        "test_history": []
+    }
+    await db.users.insert_one(user)
+    token = create_access_token({"sub": user["user_id"], "username": user["username"]})
+    return {"access_token": token, "token_type": "bearer", "user": {"user_id": user["user_id"], "username": user["username"], "email": user["email"]}}
+
+@app.post("/api/auth/login", response_model=TokenResponse)
+async def login_user(req: LoginRequest):
+    db = get_database()
+    user = await db.users.find_one({"$or": [{"username": req.username_or_email}, {"email": req.username_or_email}]})
+    if not user or not verify_password(req.password, user.get("password_hash", "")):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    token = create_access_token({"sub": user["user_id"], "username": user["username"]})
+    return {"access_token": token, "token_type": "bearer", "user": {"user_id": user["user_id"], "username": user["username"], "email": user["email"]}}
+
 
 @app.get("/")
 async def root():
     return {"message": "Mock Test Platform API", "status": "running"}
 
 @app.post("/api/tests/create")
-async def create_test(test_config: TestConfig):
+async def create_test(test_config: TestConfig, authorization: Optional[str] = Header(default=None)):
     """Create a new mock test configuration"""
     try:
         db = get_database()
+        token_payload = verify_token(authorization)
+        if not token_payload:
+            raise HTTPException(status_code=401, detail="Unauthorized")
         
         # Generate test ID if not provided
         if not test_config.test_id:
@@ -54,6 +110,7 @@ async def create_test(test_config: TestConfig):
         test_config_dict = test_config.dict()
         test_config_dict["created_at"] = datetime.utcnow()
         test_config_dict["status"] = "created"
+        test_config_dict["user_id"] = token_payload.get("sub")
         
         await db.test_configs.insert_one(test_config_dict)
         
@@ -117,7 +174,7 @@ async def get_test_questions(test_id: str, subject: Optional[str] = None):
         raise HTTPException(status_code=500, detail=f"Error retrieving questions: {str(e)}")
 
 @app.post("/api/tests/{test_id}/submit")
-async def submit_test(test_id: str, submission: TestSubmission):
+async def submit_test(test_id: str, submission: TestSubmission, authorization: Optional[str] = Header(default=None)):
     """Submit test answers for evaluation"""
     try:
         db = get_database()
@@ -141,10 +198,15 @@ async def submit_test(test_id: str, submission: TestSubmission):
         
         # Store results
         results.test_id = test_id
+        token_payload = verify_token(authorization)
+        if token_payload:
+            results.user_id = token_payload.get("sub")
         results.submitted_at = datetime.utcnow()
         
         # Ensure stored document is JSON-serializable (_id will be added by Mongo, but we won't return it)
         await db.test_results.insert_one(results.dict())
+        if token_payload:
+            await db.users.update_one({"user_id": results.user_id}, {"$addToSet": {"test_history": test_id}})
         
         return {
             "success": True,
@@ -153,6 +215,18 @@ async def submit_test(test_id: str, submission: TestSubmission):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error submitting test: {str(e)}")
+
+@app.get("/api/users/me/results")
+async def list_my_results(authorization: Optional[str] = Header(default=None)):
+    token_payload = verify_token(authorization)
+    if not token_payload:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    db = get_database()
+    user_id = token_payload.get("sub")
+    out = []
+    async for r in db.test_results.find({"user_id": user_id}, {"_id": 0}).sort("submitted_at", -1):
+        out.append(r)
+    return {"success": True, "results": out}
 
 @app.get("/api/tests/{test_id}/results")
 async def get_test_results(test_id: str):
@@ -178,6 +252,16 @@ async def generate_ai_analysis(test_id: str):
     try:
         db = get_database()
         
+        # If analysis already exists for this test, return cached version
+        existing = await db.analysis.find_one({"test_id": test_id}, {"_id": 0})
+        if existing:
+            return {
+                "success": True,
+                "analysis": existing.get("analysis", ""),
+                "session_id": existing.get("session_id"),
+                "cached": True
+            }
+
         # Get test results
         results = await db.test_results.find_one({"test_id": test_id})
         if not results:
@@ -219,6 +303,20 @@ async def get_analysis(session_id: str):
             "success": True,
             "analysis": analysis["analysis"]
         }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error retrieving analysis: {str(e)}")
+
+@app.get("/api/analysis/test/{test_id}")
+async def get_analysis_by_test(test_id: str):
+    """Return existing analysis for a test if available"""
+    try:
+        db = get_database()
+        analysis = await db.analysis.find_one({"test_id": test_id}, {"_id": 0})
+        if not analysis:
+            raise HTTPException(status_code=404, detail="Analysis not found")
+        return {"success": True, "analysis": analysis.get("analysis", ""), "session_id": analysis.get("session_id")}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error retrieving analysis: {str(e)}")
 

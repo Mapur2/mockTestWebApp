@@ -11,6 +11,13 @@ export const apiClient = axios.create({
   withCredentials: false,
 })
 
+// Attach auth token if present
+apiClient.interceptors.request.use((config) => {
+  const token = localStorage.getItem('auth_token')
+  if (token) config.headers.Authorization = `Bearer ${token}`
+  return config
+})
+
 // Test management
 export async function createTest(testConfig) {
   const { data } = await apiClient.post('/api/tests/create', testConfig)
@@ -41,6 +48,27 @@ export async function generateAnalysis(testId) {
 
 export async function getAnalysis(sessionId) {
   const { data } = await apiClient.get(`/api/analysis/${encodeURIComponent(sessionId)}`)
+  return data
+}
+
+export async function getAnalysisByTest(testId) {
+  const { data } = await apiClient.get(`/api/analysis/test/${encodeURIComponent(testId)}`)
+  return data
+}
+
+// Auth
+export async function registerUser(payload) {
+  const { data } = await apiClient.post('/api/auth/register', payload)
+  return data
+}
+
+export async function loginUser(payload) {
+  const { data } = await apiClient.post('/api/auth/login', payload)
+  return data
+}
+
+export async function getMyResults() {
+  const { data } = await apiClient.get('/api/users/me/results')
   return data
 }
 

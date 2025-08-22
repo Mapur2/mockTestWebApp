@@ -11,6 +11,15 @@ export function useTimer(initialSeconds, { onExpire, autoStart = true } = {}) {
     onExpireRef.current = onExpire
   }, [onExpire])
 
+  // Reset timer when initialSeconds changes
+  useEffect(() => {
+    clearTimer()
+    setSecondsLeft(initialSeconds)
+    if (autoStart) {
+      setIsRunning(true)
+    }
+  }, [initialSeconds, autoStart])
+
   const clearTimer = useCallback(() => {
     if (intervalRef.current) {
       clearInterval(intervalRef.current)

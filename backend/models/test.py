@@ -12,6 +12,7 @@ class TestConfig(BaseModel):
     difficulty: str = Field(..., pattern="^(easy|medium|hard|intermediate)$")
     created_at: Optional[datetime] = None
     status: Optional[str] = "created"
+    user_id: Optional[str] = None
 
 class Question(BaseModel):
     question_id: str
@@ -41,6 +42,7 @@ class TestResults(BaseModel):
     performance_level: Optional[str] = None
     subject_breakdown: Optional[Dict[str, float]] = None
     topic_breakdown: Optional[Dict[str, float]] = None
+    user_id: Optional[str] = None
 
 class AnalysisRequest(BaseModel):
     test_id: str
@@ -60,6 +62,20 @@ class User(BaseModel):
     email: str
     created_at: datetime
     test_history: List[str] = Field(default_factory=list)
+
+class RegisterRequest(BaseModel):
+    username: str
+    email: str
+    password: str
+
+class LoginRequest(BaseModel):
+    username_or_email: str
+    password: str
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: Dict[str, str]
 
 class TestSession(BaseModel):
     session_id: str
