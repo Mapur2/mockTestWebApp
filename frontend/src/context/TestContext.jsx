@@ -1,359 +1,290 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useReducer } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { createTest, getTestQuestions, submitTest, getTestResults } from '../services/api'
-
-// Test state reducer
-const testReducer = (state, action) => {
-  switch (action.type) {
-    case 'SET_LOADING':
-      return { ...state, loading: action.payload }
-    
-    case 'SET_ERROR':
-      return { ...state, error: action.payload }
-    
-    case 'SET_TEST_CONFIG':
-      return { ...state, testConfig: action.payload }
-    
-    case 'SET_TEST_ID':
-      return { ...state, testId: action.payload }
-    
-    case 'SET_QUESTIONS':
-      return { ...state, questions: action.payload }
-    
-    case 'SET_ANSWERS':
-      return { ...state, answers: action.payload }
-    
-    case 'RECORD_ANSWER':
-      return { 
-        ...state, 
-        answers: { ...state.answers, [action.payload.questionId]: action.payload.optionKey }
-      }
-    
-    case 'SET_RESULTS':
-      return { ...state, results: action.payload }
-    
-    case 'SET_CURRENT_INDEX':
-      return { ...state, currentIndex: action.payload }
-    
-    case 'SET_TIME_ELAPSED':
-      return { ...state, timeElapsed: action.payload }
-    
-    case 'SET_LAST_SAVED':
-      return { ...state, lastSaved: action.payload }
-    
-    case 'HYDRATE_SESSION':
-      return { ...state, ...action.payload }
-    
-    case 'CLEAR_SESSION':
-      return {
-        testConfig: null,
-        testId: null,
-        questions: [],
-        answers: {},
-        results: null,
-        currentIndex: 0,
-        timeElapsed: 0,
-        lastSaved: null,
-        loading: false,
-        error: null
-      }
-    
-    default:
-      return state
-  }
-}
 
 const TestContext = createContext(null)
 
+const STORAGE_KEY = 'mocktest_autosave'
+
 export function TestProvider({ children }) {
-  const [state, dispatch] = useReducer(testReducer, {
-    testConfig: null,
-    testId: null,
-    questions: [],
-    answers: {},
-    results: null,
-    currentIndex: 0,
-    timeElapsed: 0,
-    lastSaved: null,
-    loading: false,
-    error: null
-  })
-
-  // Auto-save functionality
-  const autoSave = useCallback((testId, data) => {
-    if (!testId) return
-    
-    const storageKey = `test_session_${testId}`
-    const saveData = {
-      ...data,
-      timestamp: Date.now(),
-      version: '1.0'
-    }
-    
-    try {
-      localStorage.setItem(storageKey, JSON.stringify(saveData))
-      dispatch({ type: 'SET_LAST_SAVED', payload: Date.now() })
-    } catch (error) {
-      console.warn('Failed to auto-save test session:', error)
-    }
-  }, [])
-
-  // Auto-restore functionality
-  const autoRestore = useCallback((testId) => {
-    if (!testId) return null
-    
-    const storageKey = `test_session_${testId}`
-    try {
-      const saved = localStorage.getItem(storageKey)
-      if (saved) {
-        const data = JSON.parse(saved)
-        // Check if saved data is not too old (24 hours)
-        if (Date.now() - data.timestamp < 24 * 60 * 60 * 1000) {
-          return data
-        }
-      }
-    } catch (error) {
-      console.warn('Failed to restore test session:', error)
-    }
-    return null
-  }, [])
-
-  // Clear auto-saved data
-  const clearAutoSave = useCallback((testId) => {
-    if (!testId) return
-    
-    const storageKey = `test_session_${testId}`
-    try {
-      localStorage.removeItem(storageKey)
-    } catch (error) {
-      console.warn('Failed to clear auto-save:', error)
-    }
-  }, [])
-
-  // Create and load test
-  const createAndLoad = useCallback(async (config) => {
-    dispatch({ type: 'SET_LOADING', payload: true })
-    dispatch({ type: 'SET_ERROR', payload: null })
-    
-    try {
-      dispatch({ type: 'SET_TEST_CONFIG', payload: config })
-      
-      const resp = await createTest(config)
-      const id = resp.test_id || config.test_id
-      dispatch({ type: 'SET_TEST_ID', payload: id })
-      
-      const qResp = await getTestQuestions(id, config.subject)
-      const questionsList = qResp.questions || []
-      dispatch({ type: 'SET_QUESTIONS', payload: questionsList })
-      
-      // Auto-save initial state
-      autoSave(id, {
-        testConfig: config,
-        questions: questionsList,
-        answers: {},
-        currentIndex: 0,
-        timeElapsed: 0
-      })
-      
-      return resp
-    } catch (e) {
-      const error = e?.response?.data?.detail || e.message
-      dispatch({ type: 'SET_ERROR', payload: error })
-      throw e
-    } finally {
-      dispatch({ type: 'SET_LOADING', payload: false })
-    }
-  }, [autoSave])
-
-  // Record answer with auto-save
-  const recordAnswer = useCallback((questionId, optionKey) => {
-    dispatch({ type: 'RECORD_ANSWER', payload: { questionId, optionKey } })
-    
-    // Auto-save after recording answer
-    if (state.testId) {
-      autoSave(state.testId, {
-        testConfig: state.testConfig,
-        questions: state.questions,
-        answers: { ...state.answers, [questionId]: optionKey },
-        currentIndex: state.currentIndex,
-        timeElapsed: state.timeElapsed
-      })
-    }
-  }, [state.testId, state.testConfig, state.questions, state.answers, state.currentIndex, state.timeElapsed, autoSave])
-
-  // Update current question index with auto-save
-  const setCurrentIndex = useCallback((index) => {
-    dispatch({ type: 'SET_CURRENT_INDEX', payload: index })
-    
-    // Auto-save after changing question
-    if (state.testId) {
-      autoSave(state.testId, {
-        testConfig: state.testConfig,
-        questions: state.questions,
-        answers: state.answers,
-        currentIndex: index,
-        timeElapsed: state.timeElapsed
-      })
-    }
-  }, [state.testId, state.testConfig, state.questions, state.answers, state.timeElapsed, autoSave])
-
-  // Update time elapsed with auto-save
-  const setTimeElapsed = useCallback((time) => {
-    dispatch({ type: 'SET_TIME_ELAPSED', payload: time })
-    
-    // Auto-save time every 30 seconds
-    if (state.testId && time % 30 === 0) {
-      autoSave(state.testId, {
-        testConfig: state.testConfig,
-        questions: state.questions,
-        answers: state.answers,
-        currentIndex: state.currentIndex,
-        timeElapsed: time
-      })
-    }
-  }, [state.testId, state.testConfig, state.questions, state.answers, state.currentIndex, autoSave])
-
-  // Submit test
-  const submit = useCallback(async (timeTakenSeconds) => {
-    if (!state.testId) return
-    
-    dispatch({ type: 'SET_LOADING', payload: true })
-    dispatch({ type: 'SET_ERROR', payload: null })
-    
-    try {
-      const payload = { 
-        test_id: state.testId, 
-        answers: state.answers, 
-        time_taken: timeTakenSeconds 
-      }
-      
-      const resp = await submitTest(state.testId, payload)
-      dispatch({ type: 'SET_RESULTS', payload: resp.results })
-      
-      // Clear auto-save after successful submission
-      clearAutoSave(state.testId)
-      
-      return resp
-    } catch (e) {
-      const error = e?.response?.data?.detail || e.message
-      dispatch({ type: 'SET_ERROR', payload: error })
-      throw e
-    } finally {
-      dispatch({ type: 'SET_LOADING', payload: false })
-    }
-  }, [state.testId, state.answers, clearAutoSave])
-
-  // Refresh results
-  const refreshResults = useCallback(async (idOverride) => {
-    const idToUse = idOverride || state.testId
-    if (!idToUse) return
-    
-    dispatch({ type: 'SET_LOADING', payload: true })
-    dispatch({ type: 'SET_ERROR', payload: null })
-    
-    try {
-      const resp = await getTestResults(idToUse)
-      dispatch({ type: 'SET_RESULTS', payload: resp.results })
-      return resp
-    } catch (e) {
-      const error = e?.response?.data?.detail || e.message
-      dispatch({ type: 'SET_ERROR', payload: error })
-    } finally {
-      dispatch({ type: 'SET_LOADING', payload: false })
-    }
-  }, [state.testId])
-
-  // Hydrate session from external data
-  const hydrate = useCallback(({ id, config, questions: questionsList, answers: answersList, currentIndex: index, timeElapsed: time }) => {
-    dispatch({ type: 'HYDRATE_SESSION', payload: { 
-      testId: id, 
-      testConfig: config, 
-      questions: questionsList || [],
-      answers: answersList || {},
-      currentIndex: index || 0,
-      timeElapsed: time || 0
-    }})
-  }, [])
-
-  // Restore session from auto-save
-  const restoreSession = useCallback((testId) => {
-    const saved = autoRestore(testId)
-    if (saved) {
-      hydrate({
-        id: testId,
-        config: saved.testConfig,
-        questions: saved.questions,
-        answers: saved.answers,
-        currentIndex: saved.currentIndex,
-        timeElapsed: saved.timeElapsed
-      })
-      return true
-    }
-    return false
-  }, [autoRestore, hydrate])
-
-  // Clear session
-  const clearSession = useCallback(() => {
-    if (state.testId) {
-      clearAutoSave(state.testId)
-    }
-    dispatch({ type: 'CLEAR_SESSION' })
-  }, [state.testId, clearAutoSave])
+  // Test state
+  const [testConfig, setTestConfig] = useState(null)
+  const [testId, setTestId] = useState(null)
+  const [questions, setQuestions] = useState([])
+  const [answers, setAnswers] = useState({})
+  const [currentIndex, setCurrentIndex] = useState(0)
+  const [timeElapsed, setTimeElapsed] = useState(0)
+  const [activeSubject, setActiveSubject] = useState(null)
+  
+  // UI state
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+  const [results, setResults] = useState(null)
+  const [autoSaveStatus, setAutoSaveStatus] = useState('idle') // 'idle', 'saving', 'saved', 'error'
 
   // Computed values
+  const totalQuestions = questions.length
   const progress = useMemo(() => ({
-    answered: Object.keys(state.answers).length,
-    total: state.questions.length,
-    percentage: state.questions.length > 0 ? Math.round((Object.keys(state.answers).length / state.questions.length) * 100) : 0
-  }), [state.answers, state.questions])
+    answered: Object.keys(answers).length,
+    total: totalQuestions,
+    percentage: totalQuestions > 0 ? Math.round((Object.keys(answers).length / totalQuestions) * 100) : 0
+  }), [answers, totalQuestions])
+
+  const canSubmit = useMemo(() => 
+    Object.keys(answers).length === totalQuestions && totalQuestions > 0, 
+    [answers, totalQuestions]
+  )
+
+  const subjects = useMemo(() => {
+    const s = testConfig?.subjects || (testConfig?.subject ? [testConfig.subject] : [])
+    return s.length ? s : ['Physics']
+  }, [testConfig])
 
   const currentQuestion = useMemo(() => 
-    state.questions[state.currentIndex], [state.questions, state.currentIndex]
+    questions[currentIndex], 
+    [questions, currentIndex]
   )
 
-  const hasUnsavedChanges = useMemo(() => 
-    Object.keys(state.answers).length > 0 || state.timeElapsed > 0, 
-    [state.answers, state.timeElapsed]
-  )
+  // Auto-save functionality
+  const saveToStorage = useCallback((data) => {
+    try {
+      const payload = {
+        testId,
+        answers,
+        timeElapsed,
+        currentIndex,
+        activeSubject,
+        timestamp: Date.now(),
+        ...data
+      }
+      localStorage.setItem(`${STORAGE_KEY}:${testId}`, JSON.stringify(payload))
+      setAutoSaveStatus('saved')
+      setTimeout(() => setAutoSaveStatus('idle'), 2000)
+    } catch (error) {
+      console.error('Auto-save failed:', error)
+      setAutoSaveStatus('error')
+    }
+  }, [testId, answers, timeElapsed, currentIndex, activeSubject])
+
+  const loadFromStorage = useCallback((id) => {
+    try {
+      const raw = localStorage.getItem(`${STORAGE_KEY}:${id}`)
+      if (!raw) return false
+      
+      const saved = JSON.parse(raw)
+      if (saved?.answers) {
+        setAnswers(saved.answers)
+      }
+      if (typeof saved?.currentIndex === 'number') {
+        setCurrentIndex(saved.currentIndex)
+      }
+      if (typeof saved?.timeElapsed === 'number') {
+        setTimeElapsed(saved.timeElapsed)
+      }
+      if (saved?.activeSubject) {
+        setActiveSubject(saved.activeSubject)
+      }
+      return true
+    } catch (error) {
+      console.error('Failed to load auto-save:', error)
+      return false
+    }
+  }, [])
+
+  const clearStorage = useCallback((id) => {
+    try {
+      localStorage.removeItem(`${STORAGE_KEY}:${id}`)
+    } catch (error) {
+      console.error('Failed to clear auto-save:', error)
+    }
+  }, [])
+
+  // Auto-save effect
+  useEffect(() => {
+    if (!testId) return
+    
+    setAutoSaveStatus('saving')
+    const timeoutId = setTimeout(() => {
+      saveToStorage()
+    }, 1000) // Debounce auto-save
+
+    return () => clearTimeout(timeoutId)
+  }, [testId, answers, timeElapsed, currentIndex, activeSubject, saveToStorage])
+
+  // Test actions
+  const createAndLoad = useCallback(async (config) => {
+    setLoading(true)
+    setError(null)
+    try {
+      setTestConfig(config)
+      const resp = await createTest(config)
+      const id = resp.test_id || config.test_id
+      setTestId(id)
+      
+      const qResp = await getTestQuestions(id, config.subject)
+      setQuestions(qResp.questions || [])
+      
+      // Set initial active subject
+      const initialSubject = config.subjects?.[0] || config.subject || 'Physics'
+      setActiveSubject(initialSubject)
+      
+      return resp
+    } catch (e) {
+      setError(e?.response?.data?.detail || e.message)
+      throw e
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  const loadExistingTest = useCallback(async (id) => {
+    setLoading(true)
+    setError(null)
+    try {
+      const resp = await getTestQuestions(id)
+      setTestId(id)
+      setTestConfig({
+        duration: resp.duration,
+        subjects: resp.subjects,
+        subject: resp.subjects?.[0]
+      })
+      setQuestions(resp.questions || [])
+      
+      // Load auto-save data
+      const hasAutoSave = loadFromStorage(id)
+      if (!hasAutoSave) {
+        // Set initial active subject if no auto-save
+        const initialSubject = resp.subjects?.[0] || 'Physics'
+        setActiveSubject(initialSubject)
+      }
+      
+      return resp
+    } catch (e) {
+      setError(e?.response?.data?.detail || e.message)
+      throw e
+    } finally {
+      setLoading(false)
+    }
+  }, [loadFromStorage])
+
+  const recordAnswer = useCallback((questionId, optionKey) => {
+    setAnswers(prev => ({ ...prev, [questionId]: optionKey }))
+  }, [])
+
+  const submit = useCallback(async (timeTakenSeconds) => {
+    if (!testId) return
+    setLoading(true)
+    setError(null)
+    try {
+      const payload = { test_id: testId, answers, time_taken: timeTakenSeconds }
+      const resp = await submitTest(testId, payload)
+      setResults(resp.results)
+      
+      // Clear auto-save after successful submission
+      clearStorage(testId)
+      
+      return resp
+    } catch (e) {
+      setError(e?.response?.data?.detail || e.message)
+      throw e
+    } finally {
+      setLoading(false)
+    }
+  }, [answers, testId, clearStorage])
+
+  const refreshResults = useCallback(async (idOverride) => {
+    const idToUse = idOverride || testId
+    if (!idToUse) return
+    setLoading(true)
+    setError(null)
+    try {
+      const resp = await getTestResults(idToUse)
+      setResults(resp.results)
+      return resp
+    } catch (e) {
+      setError(e?.response?.data?.detail || e.message)
+    } finally {
+      setLoading(false)
+    }
+  }, [testId])
+
+  const hydrate = useCallback(({ id, config, questions: questionsList }) => {
+    if (id) setTestId(id)
+    if (config) setTestConfig(config)
+    if (Array.isArray(questionsList)) setQuestions(questionsList)
+  }, [])
+
+  const reset = useCallback(() => {
+    setTestConfig(null)
+    setTestId(null)
+    setQuestions([])
+    setAnswers({})
+    setCurrentIndex(0)
+    setTimeElapsed(0)
+    setActiveSubject(null)
+    setLoading(false)
+    setError(null)
+    setResults(null)
+    setAutoSaveStatus('idle')
+  }, [])
+
+  const navigateToQuestion = useCallback((index) => {
+    if (index >= 0 && index < questions.length) {
+      setCurrentIndex(index)
+    }
+  }, [questions.length])
+
+  const navigateToSubject = useCallback((subject) => {
+    setActiveSubject(subject)
+    // Jump to first question of selected subject
+    const firstIdx = questions.findIndex(q => q.subject === subject)
+    if (firstIdx !== -1) {
+      setCurrentIndex(firstIdx)
+    }
+  }, [questions])
+
+  const updateTimeElapsed = useCallback((remainingSeconds) => {
+    const total = (testConfig?.duration || 30) * 60
+    setTimeElapsed(total - remainingSeconds)
+  }, [testConfig?.duration])
 
   const value = useMemo(() => ({
     // State
-    ...state,
+    testConfig,
+    testId,
+    questions,
+    answers,
+    currentIndex,
+    timeElapsed,
+    activeSubject,
+    loading,
+    error,
+    results,
+    autoSaveStatus,
+    
+    // Computed
     progress,
+    canSubmit,
+    subjects,
     currentQuestion,
-    hasUnsavedChanges,
+    totalQuestions,
     
     // Actions
     createAndLoad,
+    loadExistingTest,
     recordAnswer,
-    setCurrentIndex,
-    setTimeElapsed,
     submit,
     refreshResults,
     hydrate,
-    restoreSession,
-    clearSession,
-    
-    // Auto-save utilities
-    autoSave,
-    autoRestore,
-    clearAutoSave
+    reset,
+    navigateToQuestion,
+    navigateToSubject,
+    updateTimeElapsed,
+    clearStorage
   }), [
-    state,
-    progress,
-    currentQuestion,
-    hasUnsavedChanges,
-    createAndLoad,
-    recordAnswer,
-    setCurrentIndex,
-    setTimeElapsed,
-    submit,
-    refreshResults,
-    hydrate,
-    restoreSession,
-    clearSession,
-    autoSave,
-    autoRestore,
-    clearAutoSave
+    testConfig, testId, questions, answers, currentIndex, timeElapsed, activeSubject,
+    loading, error, results, autoSaveStatus, progress, canSubmit, subjects, currentQuestion,
+    totalQuestions, createAndLoad, loadExistingTest, recordAnswer, submit, refreshResults,
+    hydrate, reset, navigateToQuestion, navigateToSubject, updateTimeElapsed, clearStorage
   ])
 
   return <TestContext.Provider value={value}>{children}</TestContext.Provider>

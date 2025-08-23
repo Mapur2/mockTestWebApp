@@ -11,9 +11,13 @@ export default function CreatePage() {
   const { user } = useAuth()
 
   const handleCreate = useCallback(async (config) => {
-    const resp = await createAndLoad(config)
-    const testId = resp?.test_id || config.test_id
-    navigate(`/test/${testId}`)
+    try {
+      const resp = await createAndLoad(config)
+      const testId = resp?.test_id || config.test_id
+      navigate(`/test/${testId}`)
+    } catch (error) {
+      console.error('Failed to create test:', error)
+    }
   }, [createAndLoad, navigate])
 
   return (
