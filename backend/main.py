@@ -30,7 +30,7 @@ app.add_middleware(
 
 # AI API configuration
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEGEMINI_API_KEY")
 
 # In-memory storage for demo (replace with database in production)
 test_sessions = {}
@@ -509,6 +509,3 @@ def generate_basic_analysis(results: dict) -> str:
 - Take more practice tests to build confidence
 """
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
